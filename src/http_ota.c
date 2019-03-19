@@ -118,12 +118,12 @@ static int http_ota_fw_download(const char* uri)
 
     LOG_I("Start erase flash (%s) partition!", dl_part->name);
 
-    if (fal_partition_erase(dl_part, 0, file_size) < 0)
-    {
-        LOG_E("Firmware download failed! Partition (%s) erase error!", dl_part->name);
-        ret = -RT_ERROR;
-        goto __exit;
-    }
+   // if (fal_partition_erase(dl_part, 0, file_size) < 0)
+   // {
+   //     LOG_E("Firmware download failed! Partition (%s) erase error!", dl_part->name);
+   //     ret = -RT_ERROR;
+   //     goto __exit;
+   // }
     LOG_I("Erase flash (%s) partition success!", dl_part->name);
 
     buffer_read = web_malloc(HTTP_OTA_BUFF_LEN);
@@ -159,7 +159,7 @@ static int http_ota_fw_download(const char* uri)
             LOG_E("Exit: server return err (%d)!", length);
             ret = -RT_ERROR;
             goto __exit;
-        }
+        } 
 
     } while(total_length != file_size);
 
@@ -182,7 +182,7 @@ static int http_ota_fw_download(const char* uri)
         rt_hw_cpu_reset();
     }
 
-__exit:
+__exit:  
     if (session != RT_NULL)
         webclient_close(session);
     if (buffer_read != RT_NULL)
