@@ -15,6 +15,7 @@
 
 #include "webclient.h"
 #include <fal.h>
+#include "http_ota.h"
 
 #define DBG_ENABLE
 #define DBG_SECTION_NAME "http_ota"
@@ -34,7 +35,7 @@
 #define HTTP_OTA_DL_DELAY (10 * RT_TICK_PER_SECOND)
 
 #define HTTP_OTA_URL PKG_HTTP_OTA_URL
-
+OTA_Struct_pt h_ota = NULL;
 static void print_progress(size_t cur_size, size_t total_size)
 {
     static unsigned char progress_sign[100 + 1];
@@ -66,15 +67,62 @@ static void print_progress(size_t cur_size, size_t total_size)
     LOG_I("\033[2A");
     LOG_I("Download: [%s] %d%%", progress_sign, per);
 }
+void *IOT_OTA_Init(void)
+{
+    OTA_Struct_pt h_ota = NULL;
+    if (NULL == (h_ota = rt_malloc(sizeof(OTA_Struct_t))))
+    {
+        LOG_E("allocate failed");
+        return NULL;
+    }
+    memset(h_ota, 0, sizeof(OTA_Struct_t));
+    h_ota->state = IOT_OTAS_UNINITED;
+    if (0 != utils_md5_init(&h_ota->md5))
+    {
+        LOG_E("initialize md5 failed");
+        goto do_exit;
+    }
 
-static int http_ota_fw_download(const char *uri)
+    h_ota->state = IOT_OTAS_INITED;
+    return h_ota;
+
+do_exit:
+
+    if (NULL != h_ota)
+    {
+        rt_free(h_ota);
+    }
+    return NULL;
+}
+
+void http_ota_fw_download_entry(void *parameter)
 {
     int ret = 0, resp_status;
-    int file_size = 0, length, total_length = 0;
+    int file_size = 0, length, total_length = sizeof(app_struct);
     rt_uint8_t *buffer_read = RT_NULL;
     struct webclient_session *session = RT_NULL;
     const struct fal_partition *dl_part = RT_NULL;
     rt_uint32_t flash_check_temp = 0;
+    static rt_uint8_t entry_is_running = 0;
+    app_struct_t app_info = parameter;
+
+    if (entry_is_running == 1)
+        goto _running_exit;
+    entry_is_running = 1;
+
+    RT_ASSERT(app_info != RT_NULL);
+    if (h_ota)
+    {
+        rt_free(h_ota);
+        h_ota = NULL;
+    }
+    h_ota = IOT_OTA_Init();
+    if (h_ota == NULL)
+    {
+        LOG_E("IOT_OTA_Init failed!");
+        ret = -RT_ERROR;
+        goto __exit;
+    }
 
     /* Get download partition information and erase download partition data */
     if ((dl_part = fal_partition_find("download")) == RT_NULL)
@@ -118,7 +166,7 @@ static int http_ota_fw_download(const char *uri)
     }
 
     /* send GET request by default header */
-    if ((resp_status = webclient_get(session, uri)) != 200)
+    if ((resp_status = webclient_get(session, app_info->url)) != 200)
     {
         LOG_E("webclient GET request failed, response(%d) error.", resp_status);
         ret = -RT_ERROR;
@@ -164,6 +212,7 @@ static int http_ota_fw_download(const char *uri)
                 ret = -RT_ERROR;
                 goto __exit;
             }
+            utils_md5_update(&h_ota->md5, buffer_read, length);
             total_length += length;
 
             print_progress(total_length, file_size);
@@ -181,6 +230,26 @@ static int http_ota_fw_download(const char *uri)
 
     if (total_length == file_size)
     {
+        LOG_D("check    md5 (%s)!", app_info->md5);
+        char output_str[33] = {0};
+        utils_md5_Finalize(&h_ota->md5, output_str);
+        LOG_D("download md5 (%s)!", output_str);
+
+        if (rt_strcasecmp(app_info->md5, output_str) != 0)
+        {
+            LOG_E("md5 check err");
+            ret = -RT_ERROR;
+            goto __exit;
+        }
+        /* Write the data to the corresponding partition address */
+
+        if (fal_partition_write(dl_part, 0, (const uint8_t *)app_info, sizeof(app_struct)) < 0)
+        {
+            LOG_E("Firmware download failed! Partition (%s) write data error!", dl_part->name);
+            ret = -RT_ERROR;
+            goto __exit;
+        }
+
         if (session != RT_NULL)
             webclient_close(session);
         if (buffer_read != RT_NULL)
@@ -197,12 +266,21 @@ static int http_ota_fw_download(const char *uri)
     }
 
 __exit:
+    entry_is_running = 0;
+    if (h_ota != NULL)
+    {
+        rt_free(h_ota);
+        h_ota = NULL;
+    }
+_running_exit:
+    rt_free(parameter);
     if (session != RT_NULL)
         webclient_close(session);
     if (buffer_read != RT_NULL)
         web_free(buffer_read);
-
-    return ret;
+    if (ret == RT_EOK)
+    {
+    }
 }
 
 void http_ota(uint8_t argc, char **argv)
@@ -210,11 +288,11 @@ void http_ota(uint8_t argc, char **argv)
     if (argc < 2)
     {
         rt_kprintf("using uri: " HTTP_OTA_URL "\n");
-        http_ota_fw_download(HTTP_OTA_URL);
+        //  http_ota_fw_download(HTTP_OTA_URL);
     }
     else
     {
-        http_ota_fw_download(argv[1]);
+        //  http_ota_fw_download(argv[1]);
     }
 }
 /**
