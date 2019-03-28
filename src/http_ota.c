@@ -36,23 +36,24 @@
 
 #define HTTP_OTA_URL PKG_HTTP_OTA_URL
 OTA_Struct_pt h_ota = NULL;
-static void print_progress(size_t cur_size, size_t total_size)
+static void print_progress(OTA_Struct_pt h_ota)
 {
     static unsigned char progress_sign[100 + 1];
-    uint8_t i, per = cur_size * 100 / total_size;
+    uint8_t i;
 
-    if (per > 100)
+    h_ota->per = (IOT_OTA_Progress_t)(h_ota->size_fetched * 100 / h_ota->size_file);
+    if (h_ota->per > IOT_OTAP_FETCH_PERCENTAGE_MAX)
     {
-        per = 100;
+        h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MAX;
     }
 
     for (i = 0; i < 100; i++)
     {
-        if (i < per)
+        if (i < h_ota->per)
         {
             progress_sign[i] = '=';
         }
-        else if (per == i)
+        else if (h_ota->per == i)
         {
             progress_sign[i] = '>';
         }
@@ -63,9 +64,9 @@ static void print_progress(size_t cur_size, size_t total_size)
     }
 
     progress_sign[sizeof(progress_sign) - 1] = '\0';
-
+    // mqtt_send_cmd();
     LOG_I("\033[2A");
-    LOG_I("Download: [%s] %d%%", progress_sign, per);
+    LOG_I("Download: [%s] %d%%", progress_sign, h_ota->per);
 }
 void *IOT_OTA_Init(void)
 {
@@ -77,6 +78,7 @@ void *IOT_OTA_Init(void)
     }
     memset(h_ota, 0, sizeof(OTA_Struct_t));
     h_ota->state = IOT_OTAS_UNINITED;
+    h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MIN;
     if (0 != utils_md5_init(&h_ota->md5))
     {
         LOG_E("initialize md5 failed");
@@ -95,6 +97,25 @@ do_exit:
     return NULL;
 }
 
+/* check whether is downloading */
+int IOT_OTA_IsFetching(void)
+{
+    if (NULL == h_ota)
+    {
+        LOG_E("handle is NULL");
+        return 0;
+    }
+
+    if (IOT_OTAS_UNINITED == h_ota->state)
+    {
+        LOG_E("handle is uninitialized");
+        h_ota->err = IOT_OTAE_INVALID_STATE;
+        return 0;
+    }
+
+    return (IOT_OTAS_FETCHING == h_ota->state);
+}
+void mqtt_send_cmd(const char *send_str);
 void http_ota_fw_download_entry(void *parameter)
 {
     int ret = 0, resp_status;
@@ -107,7 +128,7 @@ void http_ota_fw_download_entry(void *parameter)
     app_struct_t app_info = parameter;
 
     if (entry_is_running == 1)
-        goto _running_exit;
+        goto __exit;
     entry_is_running = 1;
 
     RT_ASSERT(app_info != RT_NULL);
@@ -134,7 +155,7 @@ void http_ota_fw_download_entry(void *parameter)
 
     LOG_I("check and erase flash (%s) partition!", dl_part->name);
 
-    if (fal_partition_read(dl_part, 0, (uint8_t *)&flash_check_temp, sizeof(rt_uint32_t)) < 0)
+    if (fal_partition_read(dl_part, total_length, (uint8_t *)&flash_check_temp, sizeof(rt_uint32_t)) < 0)
     {
         LOG_E("Firmware download failed! Partition (%s) read error!", dl_part->name);
         ret = -RT_ERROR;
@@ -164,7 +185,7 @@ void http_ota_fw_download_entry(void *parameter)
         ret = -RT_ERROR;
         goto __exit;
     }
-
+    LOG_D("webclient GET request.");
     /* send GET request by default header */
     if ((resp_status = webclient_get(session, app_info->url)) != 200)
     {
@@ -172,7 +193,7 @@ void http_ota_fw_download_entry(void *parameter)
         ret = -RT_ERROR;
         goto __exit;
     }
-
+    LOG_D("webclient GET header.");
     file_size = webclient_content_length_get(session);
     rt_kprintf("http file_size:%d\n", file_size);
 
@@ -197,12 +218,15 @@ void http_ota_fw_download_entry(void *parameter)
         goto __exit;
     }
     memset(buffer_read, 0x00, HTTP_OTA_BUFF_LEN);
-
+    h_ota->size_file = file_size;
     LOG_I("OTA file size is (%d)", file_size);
-
+    file_size += total_length;
+    h_ota->state = IOT_OTAS_FETCHING;
+    LOG_D("start receive file.");
     do
     {
-        length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? HTTP_OTA_BUFF_LEN : file_size - total_length);
+        length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? 
+                            HTTP_OTA_BUFF_LEN : file_size - total_length);   
         if (length > 0)
         {
             /* Write the data to the corresponding partition address */
@@ -214,29 +238,37 @@ void http_ota_fw_download_entry(void *parameter)
             }
             utils_md5_update(&h_ota->md5, buffer_read, length);
             total_length += length;
-
-            print_progress(total_length, file_size);
+            h_ota->size_last_fetched = length;
+            h_ota->size_fetched += length;
+            print_progress(h_ota);
         }
         else
         {
             LOG_E("Exit: server return err (%d)!", length);
             ret = -RT_ERROR;
+            h_ota->state = IOT_OTAS_FETCHED;
+            h_ota->err = IOT_OTAE_FETCH_FAILED;
+            h_ota->per = IOT_OTAP_FETCH_FAILED;
             goto __exit;
         }
 
-    } while (total_length != file_size);
+    } while (total_length < file_size);
 
     ret = RT_EOK;
 
     if (total_length == file_size)
     {
+        h_ota->state = IOT_OTAS_FETCHED;
         LOG_D("check    md5 (%s)!", app_info->md5);
         char output_str[33] = {0};
         utils_md5_Finalize(&h_ota->md5, output_str);
         LOG_D("download md5 (%s)!", output_str);
+        utils_md5_outstr((const unsigned char *)(dl_part->offset + FLASH_BASE + sizeof(app_struct)), h_ota->size_file, output_str);
+        LOG_D("download md5 (%s)!", output_str);
 
         if (rt_strcasecmp(app_info->md5, output_str) != 0)
         {
+            h_ota->per = IOT_OTAP_CHECK_FALIED;
             LOG_E("md5 check err");
             ret = -RT_ERROR;
             goto __exit;
@@ -272,12 +304,13 @@ __exit:
         rt_free(h_ota);
         h_ota = NULL;
     }
-_running_exit:
+
     rt_free(parameter);
     if (session != RT_NULL)
         webclient_close(session);
     if (buffer_read != RT_NULL)
         web_free(buffer_read);
+    mqtt_send_cmd("RESET_OTAFLAG");
     if (ret == RT_EOK)
     {
     }
@@ -285,10 +318,17 @@ _running_exit:
 
 void http_ota(uint8_t argc, char **argv)
 {
+    static app_struct_t app_info_p;
+    app_info_p = rt_calloc(1, sizeof(app_struct_t));
     if (argc < 2)
     {
-        rt_kprintf("using uri: " HTTP_OTA_URL "\n");
-        //  http_ota_fw_download(HTTP_OTA_URL);
+        rt_strncpy(app_info_p->url, HTTP_OTA_URL, sizeof(app_info_p->url));
+        rt_strncpy(app_info_p->md5, "77FD3C275FFA9B8ACA8A4EA7C39BEA70", sizeof(app_info_p->md5));
+        rt_strncpy(app_info_p->version, "01.01.01", sizeof(app_info_p->version));
+        app_info_p->size = 374556;
+        app_info_p->app_flag = FLASH_APP_FLAG_WORD;
+
+        ota_start(app_info_p);
     }
     else
     {

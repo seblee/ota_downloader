@@ -69,8 +69,8 @@ typedef struct
     uint32_t size_last_fetched; /* size of last downloaded */
     uint32_t size_fetched;      /* size of already downloaded */
     uint32_t size_file;         /* size of file */
-
-    MD5ctx_stt md5; /* MD5 handle */
+    IOT_OTA_Progress_t per;
+     MD5ctx_stt md5; /* MD5 handle */ 
 
     int err; /* last error code */
 

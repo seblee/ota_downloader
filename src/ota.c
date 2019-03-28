@@ -12,7 +12,11 @@
 
 #define DBG_ENABLE
 #define DBG_SECTION_NAME "ota"
+#ifdef OTA_DOWNLOADER_DEBUG
+#define DBG_LEVEL DBG_LOG
+#else
 #define DBG_LEVEL DBG_INFO
+#endif
 #define DBG_COLOR
 #include <rtdbg.h>
 #ifndef LOG_D
@@ -29,6 +33,12 @@ int ota_start(app_struct_t app_info_p)
         return -RT_ERROR;
     }
 
+    LOG_I("app_flag:0x%04x", app_info_p->app_flag);
+    LOG_I("    size:%d", app_info_p->size);
+    LOG_I("     md5:%s", app_info_p->md5);
+    LOG_I(" version:%s", app_info_p->version);
+    LOG_I("     url:%s", app_info_p->url);
+ 
     rt_thread_t tid;
     tid = rt_thread_create("mbm_fsm", http_ota_fw_download_entry, app_info_p,
                            0x3000, RT_THREAD_PRIORITY_MAX / 3, 2);
