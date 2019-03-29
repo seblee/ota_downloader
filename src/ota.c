@@ -38,9 +38,9 @@ int ota_start(app_struct_t app_info_p)
     LOG_I("     md5:%s", app_info_p->md5);
     LOG_I(" version:%s", app_info_p->version);
     LOG_I("     url:%s", app_info_p->url);
- 
+
     rt_thread_t tid;
-    tid = rt_thread_create("mbm_fsm", http_ota_fw_download_entry, app_info_p,
+    tid = rt_thread_create("http_ota", http_ota_fw_download_entry, app_info_p,
                            0x3000, RT_THREAD_PRIORITY_MAX / 3, 2);
     RT_ASSERT(tid != RT_NULL);
     if (tid != RT_NULL)

@@ -119,14 +119,15 @@ void mqtt_send_cmd(const char *send_str);
 void http_ota_fw_download_entry(void *parameter)
 {
     int ret = 0, resp_status;
-    int file_size = 0, length, total_length = sizeof(app_struct);
+    int file_size = 0, length, total_length;
     rt_uint8_t *buffer_read = RT_NULL;
     struct webclient_session *session = RT_NULL;
     const struct fal_partition *dl_part = RT_NULL;
     rt_uint32_t flash_check_temp = 0;
     static rt_uint8_t entry_is_running = 0;
     app_struct_t app_info = parameter;
-
+__retry:
+    total_length = sizeof(app_struct);
     if (entry_is_running == 1)
         goto __exit;
     entry_is_running = 1;
@@ -185,7 +186,8 @@ void http_ota_fw_download_entry(void *parameter)
         ret = -RT_ERROR;
         goto __exit;
     }
-    LOG_D("webclient GET request.");
+    LOG_I("#################request##############", dl_part->name);
+    rt_thread_delay(rt_tick_from_millisecond(5000));
     /* send GET request by default header */
     if ((resp_status = webclient_get(session, app_info->url)) != 200)
     {
@@ -193,7 +195,8 @@ void http_ota_fw_download_entry(void *parameter)
         ret = -RT_ERROR;
         goto __exit;
     }
-    LOG_D("webclient GET header.");
+    LOG_I("################# request  sucess #############", dl_part->name);
+    rt_thread_delay(rt_tick_from_millisecond(500));
     file_size = webclient_content_length_get(session);
     rt_kprintf("http file_size:%d\n", file_size);
 
@@ -219,14 +222,14 @@ void http_ota_fw_download_entry(void *parameter)
     }
     memset(buffer_read, 0x00, HTTP_OTA_BUFF_LEN);
     h_ota->size_file = file_size;
+    app_info->size = file_size;
     LOG_I("OTA file size is (%d)", file_size);
     file_size += total_length;
     h_ota->state = IOT_OTAS_FETCHING;
-    LOG_D("start receive file.");
+
     do
     {
-        length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? 
-                            HTTP_OTA_BUFF_LEN : file_size - total_length);   
+        length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? HTTP_OTA_BUFF_LEN : file_size - total_length);
         if (length > 0)
         {
             /* Write the data to the corresponding partition address */
@@ -263,8 +266,8 @@ void http_ota_fw_download_entry(void *parameter)
         char output_str[33] = {0};
         utils_md5_Finalize(&h_ota->md5, output_str);
         LOG_D("download md5 (%s)!", output_str);
-        utils_md5_outstr((const unsigned char *)(dl_part->offset + FLASH_BASE + sizeof(app_struct)), h_ota->size_file, output_str);
-        LOG_D("download md5 (%s)!", output_str);
+        // utils_md5_outstr((const unsigned char *)(dl_part->offset + FLASH_BASE + sizeof(app_struct)), h_ota->size_file, output_str);
+        // LOG_D("download md5 (%s)!", output_str);
 
         if (rt_strcasecmp(app_info->md5, output_str) != 0)
         {
@@ -301,27 +304,38 @@ __exit:
     entry_is_running = 0;
     if (h_ota != NULL)
     {
+        LOG_I("free h_ota....");
         rt_free(h_ota);
         h_ota = NULL;
     }
 
-    rt_free(parameter);
     if (session != RT_NULL)
-        webclient_close(session);
-    if (buffer_read != RT_NULL)
-        web_free(buffer_read);
-    mqtt_send_cmd("RESET_OTAFLAG");
-    if (ret == RT_EOK)
     {
+        LOG_I("free session....");
+        webclient_close(session);
     }
+    if (buffer_read != RT_NULL)
+    {
+        LOG_I("free buffer_read....");
+        web_free(buffer_read);
+        buffer_read = RT_NULL;
+    }
+    if (ret != RT_EOK)
+    {
+        int i = 0;
+        if (i++ < 10)
+            goto __retry;
+    }
+    rt_free(parameter);
+    mqtt_send_cmd("RESET_OTAFLAG");
 }
 
 void http_ota(uint8_t argc, char **argv)
 {
     static app_struct_t app_info_p;
-    app_info_p = rt_calloc(1, sizeof(app_struct_t));
     if (argc < 2)
     {
+        app_info_p = rt_calloc(1, sizeof(app_struct_t));
         rt_strncpy(app_info_p->url, HTTP_OTA_URL, sizeof(app_info_p->url));
         rt_strncpy(app_info_p->md5, "77FD3C275FFA9B8ACA8A4EA7C39BEA70", sizeof(app_info_p->md5));
         rt_strncpy(app_info_p->version, "01.01.01", sizeof(app_info_p->version));
