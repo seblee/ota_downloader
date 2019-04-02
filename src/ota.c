@@ -26,7 +26,11 @@
 int ota_start(app_struct_t app_info_p)
 {
     static int g_ota_is_initialized = 0;
-
+    if (app_info_p == RT_NULL)
+    {
+        LOG_E("app_info_p IS null");
+        return -RT_ERROR;
+    }
     if (1 == g_ota_is_initialized)
     {
         LOG_E("iot ota has been initialized");

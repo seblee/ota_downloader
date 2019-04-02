@@ -68,6 +68,7 @@ static void print_progress(OTA_Struct_pt h_ota)
     LOG_I("\033[2A");
     LOG_I("Download: [%s] %d%%", progress_sign, h_ota->per);
 }
+
 void *IOT_OTA_Init(void)
 {
     OTA_Struct_pt h_ota = NULL;
@@ -79,22 +80,9 @@ void *IOT_OTA_Init(void)
     memset(h_ota, 0, sizeof(OTA_Struct_t));
     h_ota->state = IOT_OTAS_UNINITED;
     h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MIN;
-    if (0 != utils_md5_init(&h_ota->md5))
-    {
-        LOG_E("initialize md5 failed");
-        goto do_exit;
-    }
 
     h_ota->state = IOT_OTAS_INITED;
     return h_ota;
-
-do_exit:
-
-    if (NULL != h_ota)
-    {
-        rt_free(h_ota);
-    }
-    return NULL;
 }
 
 /* check whether is downloading */
@@ -126,7 +114,11 @@ void http_ota_fw_download_entry(void *parameter)
     rt_uint32_t flash_check_temp = 0;
     static rt_uint8_t entry_is_running = 0;
     app_struct_t app_info = parameter;
+    rt_uint32_t total, used, max_used;
+
 __retry:
+    rt_memory_info(&total, &used, &max_used);
+    LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
     total_length = sizeof(app_struct);
     if (entry_is_running == 1)
         goto __exit;
@@ -187,7 +179,7 @@ __retry:
         goto __exit;
     }
     LOG_I("#################request##############", dl_part->name);
-    rt_thread_delay(rt_tick_from_millisecond(5000));
+    rt_thread_delay(rt_tick_from_millisecond(3000));
     /* send GET request by default header */
     if ((resp_status = webclient_get(session, app_info->url)) != 200)
     {
@@ -196,7 +188,6 @@ __retry:
         goto __exit;
     }
     LOG_I("################# request  sucess #############", dl_part->name);
-    rt_thread_delay(rt_tick_from_millisecond(500));
     file_size = webclient_content_length_get(session);
     rt_kprintf("http file_size:%d\n", file_size);
 
@@ -239,7 +230,6 @@ __retry:
                 ret = -RT_ERROR;
                 goto __exit;
             }
-            utils_md5_update(&h_ota->md5, buffer_read, length);
             total_length += length;
             h_ota->size_last_fetched = length;
             h_ota->size_fetched += length;
@@ -264,10 +254,9 @@ __retry:
         h_ota->state = IOT_OTAS_FETCHED;
         LOG_D("check    md5 (%s)!", app_info->md5);
         char output_str[33] = {0};
-        utils_md5_Finalize(&h_ota->md5, output_str);
+
+        utils_md5_outstr((const unsigned char *)(dl_part->offset + FLASH_BASE + sizeof(app_struct)), h_ota->size_file, output_str);
         LOG_D("download md5 (%s)!", output_str);
-        // utils_md5_outstr((const unsigned char *)(dl_part->offset + FLASH_BASE + sizeof(app_struct)), h_ota->size_file, output_str);
-        // LOG_D("download md5 (%s)!", output_str);
 
         if (rt_strcasecmp(app_info->md5, output_str) != 0)
         {
@@ -326,6 +315,8 @@ __exit:
         if (i++ < 10)
             goto __retry;
     }
+    rt_memory_info(&total, &used, &max_used);
+    LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
     rt_free(parameter);
     mqtt_send_cmd("RESET_OTAFLAG");
 }
