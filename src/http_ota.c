@@ -116,6 +116,9 @@ void http_ota_fw_download_entry(void *parameter)
     app_struct_t app_info = parameter;
     rt_uint32_t total, used, max_used;
 
+    rt_tick_t tick_start = 0;
+    rt_tick_t tick_used = 0;
+
 __retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
@@ -180,6 +183,7 @@ __retry:
     }
     LOG_I("#################request##############", dl_part->name);
     rt_thread_delay(rt_tick_from_millisecond(3000));
+    tick_start = rt_tick_get() - tick_used;
     /* send GET request by default header */
     if ((resp_status = webclient_get(session, app_info->url)) != 200)
     {
@@ -248,6 +252,7 @@ __retry:
     } while (total_length < file_size);
 
     ret = RT_EOK;
+    tick_used = rt_tick_get() - tick_start;
 
     if (total_length == file_size)
     {
@@ -278,7 +283,7 @@ __retry:
             webclient_close(session);
         if (buffer_read != RT_NULL)
             web_free(buffer_read);
-
+        LOG_I("*****time.used:%d ms*****", tick_used);
         LOG_I("Download firmware to flash success.");
         LOG_I("System now will restart...");
 
