@@ -157,6 +157,7 @@ __retry:
         ret = -RT_ERROR;
         goto __exit;
     }
+    rt_thread_delay(rt_tick_from_millisecond(3000));
     LOG_I("Flash (%s) partition check_temp:0x%08x,dl_part->len:0x%08x!", dl_part->name, flash_check_temp, dl_part->len);
     LOG_I("Flash (%s) partition check_temp:0x%08x,dl_part->offset:0x%08x!", dl_part->name, flash_check_temp, dl_part->offset);
 
@@ -182,7 +183,6 @@ __retry:
         goto __exit;
     }
     LOG_I("#################request##############", dl_part->name);
-    rt_thread_delay(rt_tick_from_millisecond(3000));
     tick_start = rt_tick_get() - tick_used;
     /* send GET request by default header */
     if ((resp_status = webclient_get(session, app_info->url)) != 200)
