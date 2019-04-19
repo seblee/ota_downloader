@@ -287,7 +287,7 @@ __retry:
         LOG_I("Download firmware to flash success.");
         LOG_I("System now will restart...");
 
-        rt_thread_delay(rt_tick_from_millisecond(5));
+        rt_thread_delay(rt_tick_from_millisecond(1000));
 
         /* Reset the device, Start new firmware */
         extern void rt_hw_cpu_reset(void);
