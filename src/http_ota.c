@@ -38,8 +38,8 @@
 OTA_Struct_pt h_ota = NULL;
 static void print_progress(OTA_Struct_pt h_ota)
 {
-    static unsigned char progress_sign[100 + 1];
-    uint8_t i;
+    //   static unsigned char progress_sign[100 + 1];
+    //    uint8_t i;
 
     h_ota->per = (IOT_OTA_Progress_t)(h_ota->size_fetched * 100 / h_ota->size_file);
     if (h_ota->per > IOT_OTAP_FETCH_PERCENTAGE_MAX)
@@ -47,26 +47,26 @@ static void print_progress(OTA_Struct_pt h_ota)
         h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MAX;
     }
 
-    for (i = 0; i < 100; i++)
-    {
-        if (i < h_ota->per)
-        {
-            progress_sign[i] = '=';
-        }
-        else if (h_ota->per == i)
-        {
-            progress_sign[i] = '>';
-        }
-        else
-        {
-            progress_sign[i] = ' ';
-        }
-    }
+    //    for (i = 0; i < 100; i++)
+    //    {
+    //        if (i < h_ota->per)
+    //        {
+    //            progress_sign[i] = '=';
+    //        }
+    //        else if (h_ota->per == i)
+    //        {
+    //            progress_sign[i] = '>';
+    //        }
+    //        else
+    //        {
+    //            progress_sign[i] = ' ';
+    //        }
+    //    }
 
-    progress_sign[sizeof(progress_sign) - 1] = '\0';
+    //  progress_sign[sizeof(progress_sign) - 1] = '\0';
     // mqtt_send_cmd();
     LOG_I("\033[2A");
-    LOG_I("Download: [%s] %d%%", progress_sign, h_ota->per);
+    LOG_I("Download: [%d%%]", h_ota->per);
 }
 
 void *IOT_OTA_Init(void)
@@ -104,6 +104,7 @@ int IOT_OTA_IsFetching(void)
     return (IOT_OTAS_FETCHING == h_ota->state);
 }
 void mqtt_send_cmd(const char *send_str);
+#include "network.h"
 void http_ota_fw_download_entry(void *parameter)
 {
     int ret = 0, resp_status;
@@ -118,14 +119,17 @@ void http_ota_fw_download_entry(void *parameter)
 
     rt_tick_t tick_start = 0;
     rt_tick_t tick_used = 0;
+    if (entry_is_running == 1)
+        goto __exit;
+    entry_is_running = 1;
+    if (ota_check_start() == 0) //check and wait until get resurt
+        goto __exit;
+    mqtt_send_cmd("DISCONNECT");
 
 __retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
     total_length = sizeof(app_struct);
-    if (entry_is_running == 1)
-        goto __exit;
-    entry_is_running = 1;
 
     RT_ASSERT(app_info != RT_NULL);
     if (h_ota)
@@ -138,7 +142,7 @@ __retry:
     {
         LOG_E("IOT_OTA_Init failed!");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
 
     /* Get download partition information and erase download partition data */
@@ -146,7 +150,7 @@ __retry:
     {
         LOG_E("Firmware download failed! Partition (%s) find error!", "download");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
 
     LOG_I("check and erase flash (%s) partition!", dl_part->name);
@@ -155,7 +159,7 @@ __retry:
     {
         LOG_E("Firmware download failed! Partition (%s) read error!", dl_part->name);
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
     rt_thread_delay(rt_tick_from_millisecond(3000));
     LOG_I("Flash (%s) partition check_temp:0x%08x,dl_part->len:0x%08x!", dl_part->name, flash_check_temp, dl_part->len);
@@ -167,7 +171,7 @@ __retry:
         {
             LOG_E("Firmware download failed! Partition (%s) erase error!", dl_part->name);
             ret = -RT_ERROR;
-            goto __exit;
+            goto __exit_retry;
         }
         LOG_I("Erase flash (%s) partition success!", dl_part->name);
     }
@@ -180,7 +184,7 @@ __retry:
     {
         LOG_E("open uri failed.");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
     LOG_I("#################request##############", dl_part->name);
     tick_start = rt_tick_get() - tick_used;
@@ -189,7 +193,7 @@ __retry:
     {
         LOG_E("webclient GET request failed, response(%d) error.", resp_status);
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
     LOG_I("################# request  sucess #############", dl_part->name);
     file_size = webclient_content_length_get(session);
@@ -199,13 +203,13 @@ __retry:
     {
         LOG_E("Request file size is 0!");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
     else if (file_size < 0)
     {
         LOG_E("webclient GET request type is chunked.");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
 
     buffer_read = web_malloc(HTTP_OTA_BUFF_LEN);
@@ -213,7 +217,7 @@ __retry:
     {
         LOG_E("No memory for http ota!");
         ret = -RT_ERROR;
-        goto __exit;
+        goto __exit_retry;
     }
     memset(buffer_read, 0x00, HTTP_OTA_BUFF_LEN);
     h_ota->size_file = file_size;
@@ -232,7 +236,7 @@ __retry:
             {
                 LOG_E("Firmware download failed! Partition (%s) write data error!", dl_part->name);
                 ret = -RT_ERROR;
-                goto __exit;
+                goto __exit_retry;
             }
             total_length += length;
             h_ota->size_last_fetched = length;
@@ -246,7 +250,7 @@ __retry:
             h_ota->state = IOT_OTAS_FETCHED;
             h_ota->err = IOT_OTAE_FETCH_FAILED;
             h_ota->per = IOT_OTAP_FETCH_FAILED;
-            goto __exit;
+            goto __exit_retry;
         }
 
     } while (total_length < file_size);
@@ -268,7 +272,7 @@ __retry:
             h_ota->per = IOT_OTAP_CHECK_FALIED;
             LOG_E("md5 check err");
             ret = -RT_ERROR;
-            goto __exit;
+            goto __exit_retry;
         }
         /* Write the data to the corresponding partition address */
 
@@ -276,7 +280,7 @@ __retry:
         {
             LOG_E("Firmware download failed! Partition (%s) write data error!", dl_part->name);
             ret = -RT_ERROR;
-            goto __exit;
+            goto __exit_retry;
         }
 
         if (session != RT_NULL)
@@ -286,16 +290,14 @@ __retry:
         LOG_I("*****time.used:%d ms*****", tick_used);
         LOG_I("Download firmware to flash success.");
         LOG_I("System now will restart...");
-
+        ota_done_cb(1); //failed
         rt_thread_delay(rt_tick_from_millisecond(1000));
 
         /* Reset the device, Start new firmware */
-        extern void rt_hw_cpu_reset(void);
-        rt_hw_cpu_reset();
+        ota_restart();
     }
 
-__exit:
-    entry_is_running = 0;
+__exit_retry:
     if (h_ota != NULL)
     {
         LOG_I("free h_ota....");
@@ -320,9 +322,13 @@ __exit:
         if (i++ < 10)
             goto __retry;
     }
+__exit:
+    entry_is_running = 0;
+    ota_done_cb(0); //failed
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
     rt_free(parameter);
+    ota_restart();
     mqtt_send_cmd("RESET_OTAFLAG");
 }
 
