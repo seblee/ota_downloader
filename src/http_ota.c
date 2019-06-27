@@ -120,18 +120,33 @@ void http_ota_fw_download_entry(void *parameter)
     rt_tick_t tick_start = 0;
     rt_tick_t tick_used = 0;
     if (entry_is_running == 1)
-        goto __exit;
+    {
+        LOG_D("ota thread is running!");
+        if (app_info)
+            rt_free(app_info);
+        return;
+    }
     entry_is_running = 1;
     if (ota_check_start() == 0) //check and wait until get resurt
-        goto __exit;
+    {
+        entry_is_running = 0;
+        if (app_info)
+        {
+            rt_free(app_info);
+            app_info = RT_NULL
+        }
+        LOG_D("get check_start resurt");
+        return;
+    }
+    LOG_I("release paho!");
     mqtt_send_cmd("DISCONNECT");
-
+    rt_thread_delay(rt_tick_from_millisecond(500));
 __retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
     total_length = sizeof(app_struct);
-
     RT_ASSERT(app_info != RT_NULL);
+    LOG_D("app_info not null!");
     if (h_ota)
     {
         rt_free(h_ota);
@@ -144,6 +159,7 @@ __retry:
         ret = -RT_ERROR;
         goto __exit_retry;
     }
+    LOG_D("IOT_OTA_Init ok");
 
     /* Get download partition information and erase download partition data */
     if ((dl_part = fal_partition_find("download")) == RT_NULL)
@@ -222,7 +238,7 @@ __retry:
     memset(buffer_read, 0x00, HTTP_OTA_BUFF_LEN);
     h_ota->size_file = file_size;
     app_info->size = file_size;
-    LOG_I("OTA file size is (%d)", file_size);
+    LOG_I("OTA file size is (%d)\r\n", file_size);
     file_size += total_length;
     h_ota->state = IOT_OTAS_FETCHING;
 
@@ -323,11 +339,17 @@ __exit_retry:
             goto __retry;
     }
 __exit:
+    if (app_info)
+    {
+        rt_free(app_info);
+        app_info = RT_NULL
+    }
     entry_is_running = 0;
     ota_done_cb(0); //failed
     rt_memory_info(&total, &used, &max_used);
+    LOG_D("http_ota thread exit");
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
-    rt_free(parameter);
+
     ota_restart();
     mqtt_send_cmd("RESET_OTAFLAG");
 }
