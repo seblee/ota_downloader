@@ -133,7 +133,7 @@ void http_ota_fw_download_entry(void *parameter)
         if (app_info)
         {
             rt_free(app_info);
-            app_info = RT_NULL
+            app_info = RT_NULL;
         }
         LOG_D("get check_start resurt");
         return;
@@ -338,11 +338,11 @@ __exit_retry:
         if (i++ < 10)
             goto __retry;
     }
-__exit:
+ 
     if (app_info)
     {
         rt_free(app_info);
-        app_info = RT_NULL
+        app_info = RT_NULL;
     }
     entry_is_running = 0;
     ota_done_cb(0); //failed
