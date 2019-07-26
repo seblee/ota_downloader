@@ -36,6 +36,9 @@
 
 #define HTTP_OTA_URL PKG_HTTP_OTA_URL
 OTA_Struct_pt h_ota = NULL;
+#include "sys_conf.h"
+extern sys_reg_st g_sys;
+
 static void print_progress(OTA_Struct_pt h_ota)
 {
     //   static unsigned char progress_sign[100 + 1];
@@ -67,6 +70,7 @@ static void print_progress(OTA_Struct_pt h_ota)
     // mqtt_send_cmd();
     LOG_I("\033[2A");
     LOG_I("Download: [%d%%]", h_ota->per);
+    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
 }
 
 void *IOT_OTA_Init(void)
@@ -82,6 +86,7 @@ void *IOT_OTA_Init(void)
     h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MIN;
 
     h_ota->state = IOT_OTAS_INITED;
+    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
     return h_ota;
 }
 
@@ -141,6 +146,7 @@ void http_ota_fw_download_entry(void *parameter)
     LOG_I("release paho!");
     mqtt_send_cmd("DISCONNECT");
     rt_thread_delay(rt_tick_from_millisecond(500));
+    g_sys.status.ComSta.ota_status = 0x0100;
 __retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
@@ -241,7 +247,7 @@ __retry:
     LOG_I("OTA file size is (%d)\r\n", file_size);
     file_size += total_length;
     h_ota->state = IOT_OTAS_FETCHING;
-
+    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
     do
     {
         length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? HTTP_OTA_BUFF_LEN : file_size - total_length);
@@ -266,10 +272,11 @@ __retry:
             h_ota->state = IOT_OTAS_FETCHED;
             h_ota->err = IOT_OTAE_FETCH_FAILED;
             h_ota->per = IOT_OTAP_FETCH_FAILED;
+            g_sys.status.ComSta.ota_status = 0xffff;
             goto __exit_retry;
         }
 
-    } while (total_length < file_size);
+    } while (total_length < file_size); 
 
     ret = RT_EOK;
     tick_used = rt_tick_get() - tick_start;
@@ -338,7 +345,7 @@ __exit_retry:
         if (i++ < 10)
             goto __retry;
     }
- 
+
     if (app_info)
     {
         rt_free(app_info);
