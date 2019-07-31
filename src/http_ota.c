@@ -39,6 +39,40 @@ OTA_Struct_pt h_ota = NULL;
 #include "sys_conf.h"
 extern sys_reg_st g_sys;
 
+void SetOtaStatus(IOT_OTA_Progress_t per, IOT_OTA_State_t state)
+{
+    uint8_t Cache0, Cache1;
+    if (state == IOT_OTAS_UNINITED) /* Uninitialized State */
+    {
+        Cache0 = state;
+        Cache1 = per;
+    }
+    else if (state == IOT_OTAS_INITED) /* Initialized State */
+    {
+        Cache0 = state;
+        Cache1 = per;
+    }
+    else if (state == IOT_OTAS_FETCHING) /* Fetching firmware */
+    {
+        Cache0 = state;
+        Cache1 = per;
+    }
+    else if (state == IOT_OTAS_FETCHED) /* Fetching firmware finish */
+    {
+        if (per < 0)
+        {
+            Cache0 = state - per;
+            Cache1 = 0;
+        }
+        else
+        {
+            Cache0 = state;
+            Cache1 = per;
+        }
+    }
+    g_sys.status.ComSta.ota_status = (Cache0 << 8) | Cache1;
+}
+
 static void print_progress(OTA_Struct_pt h_ota)
 {
     //   static unsigned char progress_sign[100 + 1];
@@ -70,7 +104,7 @@ static void print_progress(OTA_Struct_pt h_ota)
     // mqtt_send_cmd();
     LOG_I("\033[2A");
     LOG_I("Download: [%d%%]", h_ota->per);
-    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
+    SetOtaStatus(h_ota->per, h_ota->state);
 }
 
 void *IOT_OTA_Init(void)
@@ -86,7 +120,7 @@ void *IOT_OTA_Init(void)
     h_ota->per = IOT_OTAP_FETCH_PERCENTAGE_MIN;
 
     h_ota->state = IOT_OTAS_INITED;
-    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
+    SetOtaStatus(h_ota->per, h_ota->state);
     return h_ota;
 }
 
@@ -132,6 +166,7 @@ void http_ota_fw_download_entry(void *parameter)
         return;
     }
     entry_is_running = 1;
+    SetOtaStatus(IOT_OTAP_FETCH_PERCENTAGE_MIN, IOT_OTAS_UNINITED);
     if (ota_check_start() == 0) //check and wait until get resurt
     {
         entry_is_running = 0;
@@ -146,7 +181,6 @@ void http_ota_fw_download_entry(void *parameter)
     LOG_I("release paho!");
     mqtt_send_cmd("DISCONNECT");
     rt_thread_delay(rt_tick_from_millisecond(500));
-    g_sys.status.ComSta.ota_status = 0x0100;
 __retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
@@ -193,6 +227,9 @@ __retry:
         {
             LOG_E("Firmware download failed! Partition (%s) erase error!", dl_part->name);
             ret = -RT_ERROR;
+            h_ota->state = IOT_OTAS_FETCHED;
+            h_ota->per = IOT_OTAP_BURN_FAILED;
+            SetOtaStatus(h_ota->per, h_ota->state);
             goto __exit_retry;
         }
         LOG_I("Erase flash (%s) partition success!", dl_part->name);
@@ -215,6 +252,9 @@ __retry:
     {
         LOG_E("webclient GET request failed, response(%d) error.", resp_status);
         ret = -RT_ERROR;
+        h_ota->state = IOT_OTAS_FETCHED;
+        h_ota->per = IOT_OTAP_GENERAL_FAILED;
+        SetOtaStatus(h_ota->per, h_ota->state);
         goto __exit_retry;
     }
     LOG_I("################# request  sucess #############", dl_part->name);
@@ -247,7 +287,7 @@ __retry:
     LOG_I("OTA file size is (%d)\r\n", file_size);
     file_size += total_length;
     h_ota->state = IOT_OTAS_FETCHING;
-    g_sys.status.ComSta.ota_status = (h_ota->per | (h_ota->state << 8));
+    SetOtaStatus(h_ota->per, h_ota->state);
     do
     {
         length = webclient_read(session, buffer_read, file_size - total_length > HTTP_OTA_BUFF_LEN ? HTTP_OTA_BUFF_LEN : file_size - total_length);
@@ -272,11 +312,11 @@ __retry:
             h_ota->state = IOT_OTAS_FETCHED;
             h_ota->err = IOT_OTAE_FETCH_FAILED;
             h_ota->per = IOT_OTAP_FETCH_FAILED;
-            g_sys.status.ComSta.ota_status = 0xffff;
+            SetOtaStatus(h_ota->per, h_ota->state);
             goto __exit_retry;
         }
 
-    } while (total_length < file_size); 
+    } while (total_length < file_size);
 
     ret = RT_EOK;
     tick_used = rt_tick_get() - tick_start;
@@ -284,6 +324,7 @@ __retry:
     if (total_length == file_size)
     {
         h_ota->state = IOT_OTAS_FETCHED;
+        SetOtaStatus(h_ota->per, h_ota->state);
         LOG_D("check    md5 (%s)!", app_info->md5);
         char output_str[33] = {0};
 
@@ -293,6 +334,7 @@ __retry:
         if (rt_strcasecmp(app_info->md5, output_str) != 0)
         {
             h_ota->per = IOT_OTAP_CHECK_FALIED;
+            SetOtaStatus(h_ota->per, h_ota->state);
             LOG_E("md5 check err");
             ret = -RT_ERROR;
             goto __exit_retry;
@@ -313,9 +355,8 @@ __retry:
         LOG_I("*****time.used:%d ms*****", tick_used);
         LOG_I("Download firmware to flash success.");
         LOG_I("System now will restart...");
-        ota_done_cb(1); //failed
-        rt_thread_delay(rt_tick_from_millisecond(1000));
-
+        ota_done_cb(1); //sucess
+        rt_thread_delay(rt_tick_from_millisecond(5000));
         /* Reset the device, Start new firmware */
         ota_restart();
     }
@@ -343,7 +384,10 @@ __exit_retry:
     {
         int i = 0;
         if (i++ < 10)
+        {
+            rt_thread_delay(rt_tick_from_millisecond(5000));
             goto __retry;
+        }
     }
 
     if (app_info)
@@ -356,7 +400,7 @@ __exit_retry:
     rt_memory_info(&total, &used, &max_used);
     LOG_D("http_ota thread exit");
     LOG_I("\r\ntotal:%d,used:%d,max_used:%d\r\n", total, used, max_used);
-
+    rt_thread_delay(rt_tick_from_millisecond(5000));
     ota_restart();
     mqtt_send_cmd("RESET_OTAFLAG");
 }
